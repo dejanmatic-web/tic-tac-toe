@@ -1,9 +1,105 @@
+# 🔧 Iteration 2: Server Refactor
+
+**Estimated duration**: ~3 hours
+**Priority**: P0
+**Depends on**: Iteration 1
+
+---
+
+## 📋 Prerequisites
+
+- [x] Iteration 1 completed
+- [x] SDK installed
+- [x] Old event handlers removed
+
+---
+
+## 📁 Files
+
+### To Create
+```
+server/
+├── types/
+│   └── room-types.ts          # NEW
+```
+
+### To Modify
+```
+server/index.ts                 # ADD joinMatch handler
+```
+
+---
+
+## 🔨 Step 1: Room Types
+
+### `server/types/room-types.ts`
+
+```typescript
+import { Board, Player, Winner } from '../../lib/game';
+import type { ValidatedPlayer } from '../sdk/player-validator';
+
+export interface AuthenticatedPlayer extends ValidatedPlayer {
+  symbol: Player;
+  socketId: string;
+  token: string;
+}
+
+export interface SDKState {
+  matchStarted: boolean;
+  matchEnded: boolean;
+  playersReported: Set<number>;
+}
+
+export interface SDKRoom {
+  matchId: string;
+  board: Board;
+  currentPlayer: Player;
+  winner: Winner;
+  winningLine: number[] | null;
+  turnStartedAt: number | null;
+  disconnectReason: 'timeout' | 'disconnect' | null;
+  gameStatus: 'waiting' | 'playing' | 'finished';
+  players: {
+    X: AuthenticatedPlayer | null;
+    O: AuthenticatedPlayer | null;
+  };
+  turnTimer: NodeJS.Timeout | null;
+  sdkState: SDKState;
+}
+
+export function createRoom(matchId: string): SDKRoom {
+  return {
+    matchId,
+    board: ['', '', '', '', '', '', '', '', ''],
+    currentPlayer: 'X',
+    winner: null,
+    winningLine: null,
+    turnStartedAt: null,
+    disconnectReason: null,
+    gameStatus: 'waiting',
+    players: { X: null, O: null },
+    turnTimer: null,
+    sdkState: {
+      matchStarted: false,
+      matchEnded: false,
+      playersReported: new Set(),
+    },
+  };
+}
+```
+
+---
+
+## 🔨 Step 2: Refactored Server
+
+### `server/index.ts` - Complete New Version
+
+```typescript
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import type { ServerToClientEvents, ClientToServerEvents, RoomState } from '../lib/socket-types';
 import { Player, checkWinner, getWinningLine } from '../lib/game';
-import { validatePlayer, type ValidatedPlayer } from './sdk/player-validator';
-import { matchReporter } from './sdk/match-reporter';
+import { validatePlayer } from './sdk/player-validator';
 import { createRoom, type SDKRoom, type AuthenticatedPlayer } from './types/room-types';
 
 const httpServer = createServer();
@@ -12,9 +108,8 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   cors: {
     origin: [
       'http://localhost:3000',
-      'https://dev.gamerstake.io',
-      'https://gamerstake.io',
-    ],
+      process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '',
+    ].filter(Boolean),
     methods: ['GET', 'POST'],
   },
 });
@@ -25,7 +120,7 @@ const rooms = new Map<string, SDKRoom>();
 // Socket tracking
 interface SocketData {
   matchId: string | null;
-  playerId: string | null;  // SDK returns string IDs
+  playerId: number | null;
   symbol: Player | null;
 }
 const socketData = new Map<string, SocketData>();
@@ -65,39 +160,29 @@ function startTurnTimer(room: SDKRoom): void {
   }
 
   room.turnStartedAt = Date.now();
-  const currentPlayer = room.currentPlayer;
-  const currentPlayerInfo = room.players[currentPlayer];
 
-  room.turnTimer = setTimeout(async () => {
-    const winner: Player = currentPlayer === 'X' ? 'O' : 'X';
+  room.turnTimer = setTimeout(() => {
+    const winner: Player = room.currentPlayer === 'X' ? 'O' : 'X';
     room.winner = winner;
     room.disconnectReason = 'timeout';
     room.turnStartedAt = null;
     room.gameStatus = 'finished';
 
-    // Report to SDK
-    const timedOutUsername = currentPlayerInfo?.username || currentPlayer;
-    const reason = `Player ${timedOutUsername} timed out - turn limit exceeded`;
-    await matchReporter.reportError(room, reason);
-
     io.to(room.matchId).emit('roomState', toClientState(room));
-    console.log(`[Game] ${room.matchId}: ${timedOutUsername} timed out, ${winner} wins`);
+    console.log(`[Game] ${room.matchId}: ${room.currentPlayer} timed out`);
+
+    // TODO I3: reportMatchError
   }, TURN_TIMEOUT_MS);
 }
 
 // Helper: Start game when both players ready
-async function startGameIfReady(room: SDKRoom): Promise<void> {
+function startGameIfReady(room: SDKRoom): void {
   if (room.players.X && room.players.O && room.gameStatus === 'waiting') {
     room.gameStatus = 'playing';
-    console.log(`[Game] ${room.matchId}: Both players connected, starting game!`);
-
-    // Report to SDK
-    await matchReporter.startMatch(room);
-    await matchReporter.playerJoined(room, room.players.X);
-    await matchReporter.playerJoined(room, room.players.O);
-
-    // Start turn timer
     startTurnTimer(room);
+    console.log(`[Game] ${room.matchId}: Game started!`);
+
+    // TODO I3: reportMatchStart + reportPlayerJoin
   }
 }
 
@@ -108,15 +193,9 @@ function assignPlayer(
   socketId: string,
   token: string
 ): Player | null {
-  // Check if player already in this room (reconnect)
-  if (room.players.X?.id === player.id) {
-    room.players.X.socketId = socketId;
-    return 'X';
-  }
-  if (room.players.O?.id === player.id) {
-    room.players.O.socketId = socketId;
-    return 'O';
-  }
+  // Check if player already in this room
+  if (room.players.X?.id === player.id) return 'X';
+  if (room.players.O?.id === player.id) return 'O';
 
   // Assign to empty slot
   const symbol: Player = room.players.X ? 'O' : 'X';
@@ -146,22 +225,17 @@ io.on('connection', (socket) => {
     symbol: null,
   });
 
-  // JOIN MATCH - main entry point
+  // JOIN MATCH - only way for player to connect
   socket.on('joinMatch', async (matchId: string, token: string) => {
-    console.log(`[Socket] joinMatch request: ${matchId}`);
+    console.log(`[Socket] joinMatch: ${matchId}`);
 
     // Validate inputs
-    if (!matchId || typeof matchId !== 'string') {
-      socket.emit('matchError', 'Match ID is required');
+    if (!matchId || !token) {
+      socket.emit('matchError', 'Match ID and token are required');
       return;
     }
 
-    if (!token || typeof token !== 'string') {
-      socket.emit('matchError', 'Authentication token is required');
-      return;
-    }
-
-    // Validate token with SDK
+    // Validate token
     const player = await validatePlayer(token);
     if (!player) {
       socket.emit('matchError', 'Invalid or expired token');
@@ -182,7 +256,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Assign player to room
+    // Assign player
     const symbol = assignPlayer(room, player, socket.id, token);
     if (!symbol) {
       socket.emit('matchError', 'Match is full');
@@ -200,24 +274,23 @@ io.on('connection', (socket) => {
     // Join socket room
     socket.join(matchId);
 
-    // Emit success to this player
+    // Emit success
     socket.emit('matchJoined', {
       id: player.id,
       username: player.username,
       symbol,
     });
 
-    console.log(`[Room] ${matchId}: ${player.username} joined as ${symbol}`);
-
     // Start game if both players ready
-    await startGameIfReady(room);
+    startGameIfReady(room);
 
-    // Broadcast room state to all in room
+    // Broadcast room state
     io.to(matchId).emit('roomState', toClientState(room));
+    console.log(`[Room] ${matchId}: ${player.username} joined as ${symbol}`);
   });
 
   // MAKE MOVE
-  socket.on('makeMove', async (index: number) => {
+  socket.on('makeMove', (index: number) => {
     const data = socketData.get(socket.id);
     if (!data?.matchId || !data?.symbol) return;
 
@@ -228,13 +301,14 @@ io.on('connection', (socket) => {
     if (room.gameStatus !== 'playing') return;
     if (room.winner) return;
     if (room.currentPlayer !== data.symbol) return;
-    if (index < 0 || index > 8) return;
     if (room.board[index] !== '') return;
 
     // Make move
     room.board[index] = data.symbol;
     room.winner = checkWinner(room.board);
-    room.winningLine = room.winner && room.winner !== 'draw' ? getWinningLine(room.board) : null;
+    room.winningLine = room.winner && room.winner !== 'draw'
+      ? getWinningLine(room.board)
+      : null;
     room.currentPlayer = data.symbol === 'X' ? 'O' : 'X';
     room.disconnectReason = null;
 
@@ -243,9 +317,7 @@ io.on('connection', (socket) => {
       room.turnStartedAt = null;
       room.gameStatus = 'finished';
 
-      // Report result to SDK
-      await matchReporter.reportResult(room, room.winner);
-      console.log(`[Game] ${data.matchId}: Game over, winner: ${room.winner}`);
+      // TODO I3: reportMatchResult
     } else {
       startTurnTimer(room);
     }
@@ -254,7 +326,7 @@ io.on('connection', (socket) => {
   });
 
   // DISCONNECT
-  socket.on('disconnect', async () => {
+  socket.on('disconnect', () => {
     console.log(`[Socket] Disconnected: ${socket.id}`);
 
     const data = socketData.get(socket.id);
@@ -269,8 +341,6 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const disconnectedPlayer = room.players[data.symbol];
-
     // Clear player from room
     room.players[data.symbol] = null;
 
@@ -278,7 +348,7 @@ io.on('connection', (socket) => {
     if (!room.players.X && !room.players.O) {
       clearTurnTimer(room);
       rooms.delete(data.matchId);
-      console.log(`[Room] Deleted: ${data.matchId} - all players left`);
+      console.log(`[Room] Deleted: ${data.matchId}`);
       socketData.delete(socket.id);
       return;
     }
@@ -292,12 +362,9 @@ io.on('connection', (socket) => {
       clearTurnTimer(room);
       room.turnStartedAt = null;
 
-      // Report error to SDK
-      const disconnectedUsername = disconnectedPlayer?.username || data.symbol;
-      const reason = `Player ${disconnectedUsername} disconnected during active match`;
-      await matchReporter.reportError(room, reason);
+      console.log(`[Game] ${data.matchId}: ${data.symbol} disconnected`);
 
-      console.log(`[Game] ${data.matchId}: ${disconnectedUsername} disconnected, ${winner} wins`);
+      // TODO I3: reportMatchError
     }
 
     io.to(data.matchId).emit('roomState', toClientState(room));
@@ -307,5 +374,58 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
-  console.log(`[Server] XO Game server running on port ${PORT}`);
+  console.log(`[Server] Running on port ${PORT}`);
 });
+```
+
+---
+
+## ✅ Verification
+
+### Test 1: joinMatch with valid token
+```javascript
+socket.emit('joinMatch', 'test-match', 'valid.jwt.token');
+// Expected: matchJoined event with player info
+```
+
+### Test 2: joinMatch with invalid token
+```javascript
+socket.emit('joinMatch', 'test-match', 'invalid');
+// Expected: matchError('Invalid or expired token')
+```
+
+### Test 3: Two players
+```javascript
+// Player 1
+socket1.emit('joinMatch', 'test-match', 'token1');
+// Expected: matchJoined, gameStatus: 'waiting'
+
+// Player 2
+socket2.emit('joinMatch', 'test-match', 'token2');
+// Expected: matchJoined, gameStatus: 'playing'
+```
+
+### Test 4: Room full
+```javascript
+// Player 3 tries
+socket3.emit('joinMatch', 'test-match', 'token3');
+// Expected: matchError('Match is full')
+```
+
+---
+
+## 📝 Checklist
+
+- [x] `server/types/room-types.ts` created
+- [x] `server/index.ts` refactored
+- [x] `joinMatch` event works
+- [x] Token validation works
+- [x] Auto-start when both players present
+- [x] Disconnect handling works
+- [x] `makeMove` still works
+
+---
+
+## 📝 Next Step
+
+→ `04-iteration-3-error-handling.md`

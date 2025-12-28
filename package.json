@@ -10,6 +10,7 @@
     "server": "tsx server/index.ts"
   },
   "dependencies": {
+    "@gamerstake/game-platform-sdk": "^1.0.5",
     "framer-motion": "^12.23.26",
     "next": "16.1.0",
     "react": "19.2.3",
