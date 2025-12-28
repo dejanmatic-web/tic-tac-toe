@@ -14,7 +14,10 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
       'http://localhost:3000',
       'https://dev.gamerstake.io',
       'https://gamerstake.io',
-    ],
+      // Vercel deployment URLs (auto-detected)
+      process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '',
+      process.env.NEXT_PUBLIC_VERCEL_URL ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}` : '',
+    ].filter(Boolean),
     methods: ['GET', 'POST'],
   },
 });
