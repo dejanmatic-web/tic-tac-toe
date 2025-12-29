@@ -1,28 +1,29 @@
 {
-  "name": "xy-game",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-       "dev": "next dev",
-       "build": "next build",
-       "start": "next start",
-       "lint": "eslint"
-  },
-  "dependencies": {
-    "framer-motion": "^12.23.26",
-    "next": "16.1.0",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1"
-  },
-  "devDependencies": {
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.1.0",
-    "tsx": "^4.21.0",
-    "typescript": "^5"
-  }
+    "name": "xy-game",
+    "version": "0.1.0",
+    "private": true,
+    "scripts": {
+        "dev": "next dev",
+        "build": "next build",
+        "start": "next start",
+        "lint": "eslint",
+        "test:socket": "node test-socket.js"
+    },
+    "dependencies": {
+        "framer-motion": "^12.23.26",
+        "next": "16.1.0",
+        "react": "19.2.3",
+        "react-dom": "19.2.3",
+        "socket.io": "^4.8.1",
+        "socket.io-client": "^4.8.1"
+    },
+    "devDependencies": {
+        "@types/node": "^20",
+        "@types/react": "^19",
+        "@types/react-dom": "^19",
+        "eslint": "^9",
+        "eslint-config-next": "16.1.0",
+        "tsx": "^4.21.0",
+        "typescript": "^5"
+    }
 }

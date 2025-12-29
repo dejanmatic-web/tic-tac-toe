@@ -28,6 +28,6 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
-  joinMatch: (matchId: string, token: string) => void;
+  joinMatch: (matchId: string) => void; // Token is read from HTTP-only cookies on server
   makeMove: (index: number) => void;
 }
