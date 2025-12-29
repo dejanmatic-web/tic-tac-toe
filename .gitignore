@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+DEPLOYMENT_GUIDE.md
+SOCKET_SERVER_EXPLAINED.md
+VERCEL_DEPLOYMENT.md
+SEPARATE_SERVER_GUIDE.md
+VERCEL_DEPLOYMENT.md
+VERCEL_DEPLOYMENT.md
